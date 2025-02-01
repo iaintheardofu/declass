@@ -5,3 +5,4 @@ openai
 pandas
 altair
 langchain-community
+langchain-text-splitters

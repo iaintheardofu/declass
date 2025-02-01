@@ -4,3 +4,4 @@ faiss-cpu
 openai
 pandas
 altair
+langchain-community

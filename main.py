@@ -7,14 +7,14 @@ import openai
 import pandas as pd
 import altair as alt
 
-# LangChain imports (Updated for langchain-community)
+# ✅ Corrected LangChain Imports
 from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.text_splitters import CharacterTextSplitter
+from langchain_text_splitters import CharacterTextSplitter  # ✅ Fixed Import
 from langchain.chains import RetrievalQA
-from langchain_community.llms import OpenAI  # FIXED IMPORT
+from langchain_community.llms import OpenAI  # ✅ Fixed Import
 
-# Set up OpenAI API key
+# Set OpenAI API key from environment
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # --- Utility Functions ---
@@ -38,13 +38,13 @@ def build_vectorstore_from_texts(texts: list) -> FAISS:
     return vectorstore
 
 def query_vectorstore(vectorstore: FAISS, query: str) -> str:
-    """Query the FAISS vectorstore."""
+    """Query the FAISS vectorstore using a RetrievalQA chain."""
     llm = OpenAI(model_name="gpt-3.5-turbo", temperature=0)
     qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=vectorstore.as_retriever())
     return qa.run(query)
 
 def generate_report(document_text: str, template_text: str) -> str:
-    """Generate a structured report based on a template."""
+    """Generate a structured report using an AI model."""
     prompt = f"""You are an expert report generator.
 Using the source document and the report template below, generate a structured, actionable report.
 
@@ -57,8 +57,10 @@ Report Template:
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "You are an expert report generator."},
-                      {"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": "You are an expert report generator."},
+                {"role": "user", "content": prompt}
+            ],
             temperature=0.7,
             max_tokens=1024,
         )
@@ -70,7 +72,11 @@ def feith_api_submit(document_id: str, review_report: dict):
     """Simulated FEITH API submission."""
     st.info(f"Simulated FEITH API update for document {document_id}.")
     with open("feith_integration_log.json", "a") as log_file:
-        json.dump({"document_id": document_id, "review_report": review_report, "timestamp": datetime.now().isoformat()}, log_file)
+        json.dump({
+            "document_id": document_id,
+            "review_report": review_report,
+            "timestamp": datetime.now().isoformat()
+        }, log_file)
         log_file.write("\n")
 
 # --- Streamlit App ---
@@ -97,7 +103,7 @@ tab1, tab2, tab3 = st.tabs(["Declassification Review", "Chat with Document", "Re
 with tab1:
     st.header("Declassification Review")
     document_query = st.text_area("Enter document text or upload a file:", height=200)
-    uploaded_file = st.file_uploader("Upload Document", type=["txt", "pdf"], key="declass_upload")  # FIXED DUPLICATE KEY ERROR
+    uploaded_file = st.file_uploader("Upload Document", type=["txt", "pdf"], key="declass_upload")  # ✅ Unique Key
     
     if uploaded_file:
         try:
@@ -122,7 +128,7 @@ with tab1:
 # --- Tab 2: Chat with Document ---
 with tab2:
     st.header("Chat with Document")
-    uploaded_chat_file = st.file_uploader("Upload Document", type=["txt", "pdf"], key="chat_upload")  # FIXED DUPLICATE KEY ERROR
+    uploaded_chat_file = st.file_uploader("Upload Document", type=["txt", "pdf"], key="chat_upload")  # ✅ Unique Key
     
     if uploaded_chat_file:
         try:
@@ -142,7 +148,7 @@ with tab2:
 # --- Tab 3: Report Generation ---
 with tab3:
     st.header("Report Generation")
-    source_file = st.file_uploader("Upload Source Document", type=["txt", "pdf"], key="report_upload")  # FIXED DUPLICATE KEY ERROR
+    source_file = st.file_uploader("Upload Source Document", type=["txt", "pdf"], key="report_upload")  # ✅ Unique Key
     template_text = st.text_area("Enter Report Template", height=150)
     
     if source_file:

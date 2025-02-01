@@ -1,11 +1,18 @@
 import os
-import streamlit as st
-from llama_index import GPTSimpleVectorIndex, SimpleDirectoryReader, Document
-from datetime import datetime
 import json
+from datetime import datetime
+
+import streamlit as st
 import openai
 import pandas as pd
 import altair as alt
+
+# LangChain imports
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.chains import RetrievalQA
+from langchain.llms import OpenAI
 
 # Set up your OpenAI API key (ensure it's set in your environment)
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -14,45 +21,72 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def load_policy_documents(policy_dir: str) -> list:
     """
-    Load policy and guidance documents from a specified directory.
-    This should include EO 13526, DoDM 5200.01, NARA documents, SCGs, ISOO guidance, etc.
+    Load all .txt policy documents from the specified directory.
+    Returns a list of document texts.
     """
-    docs = SimpleDirectoryReader(policy_dir).load_data()
+    docs = []
+    if os.path.isdir(policy_dir):
+        for filename in os.listdir(policy_dir):
+            if filename.endswith(".txt"):
+                with open(os.path.join(policy_dir, filename), "r", encoding="utf-8") as f:
+                    docs.append(f.read())
     return docs
 
-def load_example_documents(example_dir: str) -> list:
+def build_vectorstore_from_texts(texts: list) -> FAISS:
     """
-    Load example declassified documents (e.g., JFK files) for the POC.
+    Split the texts into chunks and build a FAISS vectorstore.
     """
-    docs = SimpleDirectoryReader(example_dir).load_data()
-    return docs
+    splitter = CharacterTextSplitter(separator=" ", chunk_size=500, chunk_overlap=50)
+    chunks = []
+    for text in texts:
+        chunks.extend(splitter.split_text(text))
+    embeddings = OpenAIEmbeddings()
+    vectorstore = FAISS.from_texts(chunks, embeddings)
+    return vectorstore
 
-def build_index(documents: list) -> GPTSimpleVectorIndex:
+def query_vectorstore(vectorstore: FAISS, query: str) -> str:
     """
-    Build a LlamaIndex vector index from a list of Document objects.
+    Create a RetrievalQA chain to query the vectorstore.
     """
-    index = GPTSimpleVectorIndex(documents)
-    return index
+    llm = OpenAI(model_name="gpt-3.5-turbo", temperature=0)
+    qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=vectorstore.as_retriever())
+    result = qa.run(query)
+    return result
 
-def build_document_index_from_upload(file_text: str) -> GPTSimpleVectorIndex:
+def generate_report(document_text: str, template_text: str) -> str:
     """
-    Build an index for a single uploaded document.
+    Generate a structured report based on the source document and the provided template.
+    The prompt instructs the LLM to act as a proactive agent.
     """
-    doc = Document(text=file_text)
-    index = GPTSimpleVectorIndex([doc])
-    return index
+    prompt = f"""You are an expert report generator and proactive agent.
+Using the source document and the report template below, generate a detailed, structured report.
+Include a brief summary of next steps and actionable recommendations.
 
-def query_declassification(index: GPTSimpleVectorIndex, query: str) -> str:
-    """
-    Query the index with a prompt, retrieve relevant paragraphs, and have the LLM provide a recommendation.
-    """
-    response = index.query(query, response_mode="compact")
-    return str(response)
+Source Document:
+{document_text}
+
+Report Template:
+{template_text}
+
+Produce a comprehensive report that is well-structured and actionable."""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert report generator and proactive agent."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1024,
+        )
+        report = response["choices"][0]["message"]["content"].strip()
+        return report
+    except Exception as e:
+        return f"Error generating report: {str(e)}"
 
 def feith_api_submit(document_id: str, review_report: dict):
     """
     Placeholder function to simulate integration with FEITH.
-    In production, this function would perform an API POST/PUT to update the document status.
     """
     st.info(f"Simulated FEITH API update for document {document_id}.")
     with open("feith_integration_log.json", "a") as log_file:
@@ -64,30 +98,30 @@ def feith_api_submit(document_id: str, review_report: dict):
 
 # --- Streamlit App ---
 
-st.set_page_config(page_title="Leyden Declassification Review Hub", layout="wide")
+st.set_page_config(page_title="Document Research Assistant", layout="wide")
+st.title("Document Research Assistant")
+st.write("A collaboration with NVIDIA – Transforming document analysis and report generation with agentic behavior.")
 
-st.title("Leyden Solutions: Declassification Review Hub")
-st.write("A Proof-of-Concept for automated document review using LLM & Retrieval Augmented Generation.")
-
-# Sidebar for policy index configuration
-st.sidebar.header("Configuration & Uploads")
+# Sidebar for policy vectorstore configuration (for declassification review)
+st.sidebar.header("Policy Document Setup")
 policy_dir = st.sidebar.text_input("Policy Documents Directory", "./policy_docs")
-example_dir = st.sidebar.text_input("Example Documents Directory (e.g., JFK files)", "./example_docs")
-if st.sidebar.button("Load & Build Policy Index"):
+if st.sidebar.button("Load & Build Policy Vectorstore"):
     with st.spinner("Loading policy documents..."):
         policy_docs = load_policy_documents(policy_dir)
-        st.sidebar.success(f"Loaded {len(policy_docs)} policy documents.")
-        policy_index = build_index(policy_docs)
-    st.session_state.policy_index = policy_index
-    st.success("Policy Index Built Successfully!")
+        if not policy_docs:
+            st.sidebar.error("No policy documents found in the specified directory!")
+        else:
+            policy_vectorstore = build_vectorstore_from_texts(policy_docs)
+            st.session_state.policy_vectorstore = policy_vectorstore
+            st.sidebar.success(f"Loaded {len(policy_docs)} policy documents and built vectorstore.")
 
-# Create two tabs: one for Declassification Review and one for Chat with Document
-tab1, tab2 = st.tabs(["Declassification Review", "Chat with Document"])
+# Create three tabs: Declassification Review, Chat with Document, Report Generation
+tab1, tab2, tab3 = st.tabs(["Declassification Review", "Chat with Document", "Report Generation"])
 
 # --- Tab 1: Declassification Review ---
 with tab1:
     st.header("Declassification Review")
-    document_query = st.text_area("Enter document text for declassification review (or upload a document below):", height=200)
+    document_query = st.text_area("Enter document text for declassification review (or upload a document):", height=200)
     uploaded_file = st.file_uploader("Or Upload a Document", type=["txt", "pdf"], key="declass_upload")
     if uploaded_file is not None:
         try:
@@ -98,19 +132,19 @@ with tab1:
         st.text_area("Uploaded Document Content", value=document_text, height=200)
         document_query = document_text
     if st.button("Run Declassification Analysis"):
-        if "policy_index" not in st.session_state:
-            st.error("Please build the policy index first via the sidebar!")
+        if "policy_vectorstore" not in st.session_state:
+            st.error("Please build the policy vectorstore first via the sidebar!")
         elif not document_query:
             st.error("Please provide document text or upload a document!")
         else:
-            prompt = (
-                "Given the following document, please review it against the declassification policies (EO 13526, DoDM 5200.01, NARA, "
-                "SCGs, ISOO guidance, and publicly available information). Identify and cite the specific paragraph(s) from the policies "
-                "that indicate whether the document should or should not be declassified. Then, recommend the next steps to achieve declassification if applicable.\n\n"
+            query_prompt = (
+                "You are an expert document analyst and proactive agent. "
+                "Review the following document against established declassification policies "
+                "and provide a detailed analysis, citing relevant policy sections and recommending next steps for declassification if applicable.\n\n"
                 f"Document:\n{document_query}\n"
             )
             with st.spinner("Analyzing document..."):
-                review_report = query_declassification(st.session_state.policy_index, prompt)
+                review_report = query_vectorstore(st.session_state.policy_vectorstore, query_prompt)
             st.subheader("Declassification Review Report")
             st.write(review_report)
             document_id = "example_document_001"
@@ -124,7 +158,7 @@ with tab1:
 
 # --- Tab 2: Chat with Document ---
 with tab2:
-    st.header("Chat with Uploaded Document")
+    st.header("Chat with Document")
     uploaded_chat_file = st.file_uploader("Upload a Document for Chat", type=["txt", "pdf"], key="chat_upload")
     if uploaded_chat_file is not None:
         try:
@@ -134,21 +168,44 @@ with tab2:
             file_text = ""
         st.text_area("Uploaded Document Content", value=file_text, height=200)
         if file_text:
-            st.session_state.document_index = build_document_index_from_upload(file_text)
-            st.success("Document index built successfully!")
-    if "document_index" in st.session_state:
+            chat_vectorstore = build_vectorstore_from_texts([file_text])
+            st.session_state.chat_vectorstore = chat_vectorstore
+            st.success("Document vectorstore built for chat!")
+    if "chat_vectorstore" in st.session_state:
         if "chat_history" not in st.session_state:
             st.session_state.chat_history = []
         st.subheader("Chat with Document")
         chat_input = st.text_input("Enter your query for the document:")
         if st.button("Send Query"):
             if chat_input:
-                response = query_declassification(st.session_state.document_index, chat_input)
+                response = query_vectorstore(st.session_state.chat_vectorstore, chat_input)
                 st.session_state.chat_history.append({"query": chat_input, "response": response})
         if st.session_state.get("chat_history"):
             for msg in st.session_state.chat_history:
                 st.markdown(f"**User:** {msg['query']}")
                 st.markdown(f"**Response:** {msg['response']}")
+
+# --- Tab 3: Report Generation ---
+with tab3:
+    st.header("Report Generation")
+    st.write("Upload your source document and provide a report template to generate a structured report.")
+    source_file = st.file_uploader("Upload Source Document", type=["txt", "pdf"], key="report_source")
+    template_text = st.text_area("Enter Report Template", height=150, placeholder="e.g., Markdown template with section instructions...")
+    if source_file is not None:
+        try:
+            source_text = source_file.read().decode("utf-8")
+        except Exception as e:
+            st.error(f"Error reading source file: {e}")
+            source_text = ""
+        st.text_area("Source Document Content", value=source_text, height=200)
+    if st.button("Generate Report"):
+        if not source_file or not template_text:
+            st.error("Please provide both a source document and a report template.")
+        else:
+            with st.spinner("Generating report..."):
+                report = generate_report(source_text, template_text)
+            st.subheader("Generated Report")
+            st.write(report)
 
 # --- Analytics Dashboard Section ---
 st.header("Real-Time Analytics Dashboard")
@@ -165,7 +222,6 @@ col3.metric("Maintained Classification", analytics_data["Maintained Classificati
 col4.metric("Avg. Processing Time (sec)", analytics_data["Avg. Processing Time (sec)"])
 st.markdown("---")
 st.write("Detailed analytics and logs would be displayed here. In a production system, these would update in real-time as documents are processed.")
-
 df = pd.DataFrame({
     "Outcome": ["Declassified", "Not Declassified"],
     "Count": [analytics_data["Declassification Recommended"], analytics_data["Maintained Classification"]]
@@ -180,4 +236,4 @@ chart = alt.Chart(df).mark_bar().encode(
     title="Document Declassification Outcomes"
 )
 st.altair_chart(chart)
-st.markdown("© Leyden Solutions")
+st.markdown("© Document Research Assistant")
